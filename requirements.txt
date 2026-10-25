@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+streamlit
+plotly
+pandas
+greenlet
+spade==4.1.4
