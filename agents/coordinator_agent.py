@@ -2,6 +2,7 @@
 import asyncio
 import json
 import uuid
+import traceback
 
 import spade
 from spade.behaviour import CyclicBehaviour
@@ -10,6 +11,7 @@ from spade.message import Message
 from services.allocation import allocate_parcel
 from services.database import (
     initialize_database,
+    get_all_couriers,
     get_courier,
     get_parcel,
     get_all_allocations,
@@ -23,19 +25,50 @@ class CoordinatorAgent(spade.agent.Agent):
     def __init__(self, jid, password):
         super().__init__(jid, password)
 
-        self.couriers = [
-            {
-                "courier_id": "C001",
-                "jid": "courier1@localhost",
-                "available": True,
-                "delivery_locations": ["Colombo", "Kandy"],
-                "capacity_kg": 10.0,
-                "remaining_capacity_kg": 10.0,
-            }
-        ]
+        # Populated from SQLite during setup and refreshed before allocation.
+        self.couriers = []
 
         self.processing_parcels = set()
         self.pending_responses = {}
+
+    def refresh_couriers(self):
+        """Load all registered couriers and preserve their saved state."""
+        database_couriers = get_all_couriers()
+
+        self.couriers = []
+
+        for saved in database_couriers:
+            courier = dict(saved)
+
+            courier["courier_id"] = str(
+                courier["courier_id"]
+            ).strip().upper()
+
+            courier["jid"] = str(courier["jid"]).strip()
+            courier["available"] = bool(courier["available"])
+            courier["capacity_kg"] = float(courier["capacity_kg"])
+            courier["remaining_capacity_kg"] = float(
+                courier["remaining_capacity_kg"]
+            )
+            courier["delivery_locations"] = list(
+                courier["delivery_locations"]
+            )
+
+            self.couriers.append(courier)
+
+        print(
+            f"[COORDINATOR] Loaded {len(self.couriers)} "
+            "registered courier(s)."
+        )
+
+        for courier in self.couriers:
+            print(
+                f"  ID={courier['courier_id']}, "
+                f"JID={courier['jid']}, "
+                f"Available={courier['available']}, "
+                f"Capacity={courier['remaining_capacity_kg']} kg, "
+                f"Locations={courier['delivery_locations']}"
+            )
 
     class AllocationBehaviour(CyclicBehaviour):
 
@@ -51,12 +84,12 @@ class CoordinatorAgent(spade.agent.Agent):
 
             sender = str(msg.sender).split("/")[0]
 
+            # Use the latest courier list to recognize courier responses.
             courier_jids = {
-                courier["jid"]
+                str(courier["jid"]).split("/")[0]
                 for courier in self.agent.couriers
             }
 
-            # Route courier responses through the single listener.
             if sender in courier_jids:
                 await self.handle_courier_response(msg)
                 return
@@ -68,7 +101,7 @@ class CoordinatorAgent(spade.agent.Agent):
                 )
                 return
 
-            # Keep the listener available for courier responses.
+            # Keep this listener free to receive courier responses.
             asyncio.create_task(
                 self.handle_allocation_request(msg)
             )
@@ -124,7 +157,10 @@ class CoordinatorAgent(spade.agent.Agent):
                         "Parcel request must be a JSON object."
                     )
 
-                parcel_id = str(parcel["parcel_id"])
+                if not parcel.get("parcel_id"):
+                    raise ValueError("Parcel ID is required.")
+
+                parcel_id = str(parcel["parcel_id"]).strip()
 
                 if parcel_id in self.agent.processing_parcels:
                     await self.send_result(
@@ -136,7 +172,6 @@ class CoordinatorAgent(spade.agent.Agent):
                     )
                     return
 
-                # Confirm that the parcel exists in SQLite.
                 stored_parcel = get_parcel(parcel_id)
 
                 if stored_parcel is None:
@@ -152,8 +187,9 @@ class CoordinatorAgent(spade.agent.Agent):
                 self.agent.processing_parcels.add(parcel_id)
 
                 try:
+                    # Use the persisted parcel as the authoritative source.
                     await self.process_allocation(
-                        parcel,
+                        stored_parcel,
                         requester_jid,
                     )
                 finally:
@@ -166,7 +202,8 @@ class CoordinatorAgent(spade.agent.Agent):
                 ValueError,
             ) as error:
                 print(
-                    f"[COORDINATOR ERROR] Invalid request: {error}"
+                    f"[COORDINATOR ERROR] Invalid request: "
+                    f"{type(error).__name__}: {error}"
                 )
 
                 try:
@@ -177,17 +214,18 @@ class CoordinatorAgent(spade.agent.Agent):
                         None,
                         str(error),
                     )
-                except Exception as send_error:
+                except Exception:
                     print(
-                        "[COORDINATOR ERROR] Could not send rejection: "
-                        f"{send_error}"
+                        "[COORDINATOR ERROR] Could not send rejection:"
                     )
+                    traceback.print_exc()
 
             except Exception as error:
                 print(
-                    "[COORDINATOR ERROR] "
-                    f"{type(error).__name__}: {error}"
+                    "[COORDINATOR ERROR] Unexpected allocation-request "
+                    f"failure: {type(error).__name__}: {error}"
                 )
+                traceback.print_exc()
 
                 try:
                     await self.send_result(
@@ -195,16 +233,16 @@ class CoordinatorAgent(spade.agent.Agent):
                         parcel_id,
                         "ERROR",
                         None,
-                        "An internal allocation error occurred.",
+                        f"{type(error).__name__}: {error}",
                     )
-                except Exception as send_error:
+                except Exception:
                     print(
-                        "[COORDINATOR ERROR] Could not send error "
-                        f"response: {send_error}"
+                        "[COORDINATOR ERROR] Could not send error response:"
                     )
+                    traceback.print_exc()
 
         async def process_allocation(self, parcel, requester_jid):
-            parcel_id = str(parcel["parcel_id"])
+            parcel_id = str(parcel["parcel_id"]).strip()
 
             print(
                 f"\n[COORDINATOR] Processing parcel {parcel_id}"
@@ -213,14 +251,13 @@ class CoordinatorAgent(spade.agent.Agent):
                 f"[COORDINATOR] Requester: {requester_jid}"
             )
 
-            # DUPLICATE PROTECTION:
-            # Check persistent allocation history before selecting
-            # a courier or sending another assignment.
+            # Block duplicate successful allocations.
             existing_allocations = get_all_allocations()
 
             already_allocated = any(
                 str(allocation.get("parcel_id")) == parcel_id
-                and allocation.get("status") == "ALLOCATED"
+                and str(allocation.get("status", "")).upper()
+                == "ALLOCATED"
                 for allocation in existing_allocations
             )
 
@@ -239,38 +276,12 @@ class CoordinatorAgent(spade.agent.Agent):
                 )
                 return
 
-            # Load persisted courier state without resetting capacity.
-            for courier_record in self.agent.couriers:
-                saved = get_courier(
-                    courier_record["courier_id"]
-                )
+            # Refresh the list so every registered courier is considered.
+            self.agent.refresh_couriers()
 
-                if saved is None:
-                    save_courier(courier_record)
-                else:
-                    courier_record["remaining_capacity_kg"] = float(
-                        saved["remaining_capacity_kg"]
-                    )
-                    courier_record["available"] = bool(
-                        saved["available"]
-                    )
-                    courier_record["capacity_kg"] = float(
-                        saved["capacity_kg"]
-                    )
-                    courier_record["delivery_locations"] = list(
-                        saved["delivery_locations"]
-                    )
-
-            courier = allocate_parcel(
-                parcel,
-                self.agent.couriers,
-            )
-
-            # No suitable courier: return a rejection.
-            if courier is None:
+            if not self.agent.couriers:
                 print(
-                    f"[COORDINATOR] Result for {parcel_id}: "
-                    "UNALLOCATED"
+                    "[COORDINATOR] No couriers are registered in SQLite."
                 )
 
                 await self.send_result(
@@ -278,7 +289,44 @@ class CoordinatorAgent(spade.agent.Agent):
                     parcel_id,
                     "UNALLOCATED",
                     None,
-                    "No suitable courier is available.",
+                    "No couriers are registered in the database.",
+                )
+                return
+
+            print(
+                f"[COORDINATOR] Destination: "
+                f"{parcel.get('delivery_location')}"
+            )
+            print(
+                f"[COORDINATOR] Parcel weight: "
+                f"{parcel.get('weight_kg')} kg"
+            )
+
+            for courier_record in self.agent.couriers:
+                print(
+                    f"[COORDINATOR] Candidate {courier_record['courier_id']}: "
+                    f"available={courier_record['available']}, "
+                    f"remaining={courier_record['remaining_capacity_kg']} kg, "
+                    f"locations={courier_record['delivery_locations']}"
+                )
+
+            courier = allocate_parcel(
+                parcel,
+                self.agent.couriers,
+            )
+
+            if courier is None:
+                print(
+                    f"[COORDINATOR] No eligible courier for {parcel_id}."
+                )
+
+                await self.send_result(
+                    requester_jid,
+                    parcel_id,
+                    "UNALLOCATED",
+                    None,
+                    "No suitable courier is available. Check service "
+                    "area, availability, and remaining capacity.",
                 )
                 return
 
@@ -288,7 +336,12 @@ class CoordinatorAgent(spade.agent.Agent):
             assignment["assignment_id"] = assignment_id
             assignment["courier_id"] = courier["courier_id"]
 
-            # Save pending assignment before contacting the Courier.
+            print(
+                f"[COORDINATOR] Selected courier "
+                f"{courier['courier_id']} ({courier['jid']})."
+            )
+
+            # Persist the pending assignment before contacting the courier.
             save_allocation(
                 assignment_id=assignment_id,
                 parcel_id=parcel_id,
@@ -300,10 +353,7 @@ class CoordinatorAgent(spade.agent.Agent):
             response_future = (
                 asyncio.get_running_loop().create_future()
             )
-
-            self.agent.pending_responses[assignment_id] = (
-                response_future
-            )
+            self.agent.pending_responses[assignment_id] = response_future
 
             try:
                 request = Message(to=courier["jid"])
@@ -318,8 +368,8 @@ class CoordinatorAgent(spade.agent.Agent):
                 await self.send(request)
 
                 print(
-                    f"[COORDINATOR] Assignment {assignment_id} "
-                    f"sent to {courier['courier_id']}."
+                    f"[COORDINATOR] Assignment {assignment_id} sent "
+                    f"to {courier['courier_id']}."
                 )
 
                 try:
@@ -327,14 +377,19 @@ class CoordinatorAgent(spade.agent.Agent):
                         response_future,
                         timeout=15,
                     )
-
                 except asyncio.TimeoutError:
+                    print(
+                        f"[COORDINATOR] Timeout waiting for "
+                        f"{courier['courier_id']}."
+                    )
+
                     await self.record_and_reply(
                         requester_jid,
                         parcel_id,
                         "UNALLOCATED",
                         None,
-                        "Courier response timed out.",
+                        f"Courier {courier['courier_id']} did not respond "
+                        "within 15 seconds.",
                         assignment_id,
                     )
                     return
@@ -348,11 +403,19 @@ class CoordinatorAgent(spade.agent.Agent):
                 if not response_future.done():
                     response_future.cancel()
 
-            # Validate the Courier's response.
+            # Validate that the reply belongs to this assignment.
             if (
-                courier_result.get("parcel_id") != parcel_id
-                or courier_result.get("assignment_id") != assignment_id
+                str(courier_result.get("parcel_id")) != parcel_id
+                or str(courier_result.get("assignment_id"))
+                != assignment_id
+                or str(courier_result.get("courier_id"))
+                != str(courier["courier_id"])
             ):
+                print(
+                    "[COORDINATOR] Courier response did not match "
+                    "the pending assignment."
+                )
+
                 await self.record_and_reply(
                     requester_jid,
                     parcel_id,
@@ -363,32 +426,54 @@ class CoordinatorAgent(spade.agent.Agent):
                 )
                 return
 
-            if courier_result.get("status") != "ACCEPTED":
+            if str(courier_result.get("status", "")).upper() != "ACCEPTED":
+                details = courier_result.get(
+                    "details",
+                    "Courier rejected the assignment.",
+                )
+
+                print(
+                    f"[COORDINATOR] Courier rejected assignment: {details}"
+                )
+
                 await self.record_and_reply(
                     requester_jid,
                     parcel_id,
                     "UNALLOCATED",
                     None,
-                    courier_result.get(
-                        "details",
-                        "Courier rejected the assignment.",
-                    ),
+                    details,
                     assignment_id,
                 )
                 return
 
-            # Deduct capacity only after the Courier accepts.
-            weight = float(parcel["weight_kg"])
+            # Reload state before updating to avoid relying on stale values.
+            saved_courier = get_courier(courier["courier_id"])
 
-            courier["remaining_capacity_kg"] = max(
-                0.0,
-                float(courier["remaining_capacity_kg"]) - weight,
+            if saved_courier is None:
+                raise RuntimeError(
+                    f"Courier {courier['courier_id']} disappeared "
+                    "from the database."
+                )
+
+            weight = float(parcel["weight_kg"])
+            remaining = float(
+                saved_courier["remaining_capacity_kg"]
             )
 
-            if courier["remaining_capacity_kg"] <= 0:
-                courier["available"] = False
+            # The courier agent has accepted; persist the capacity update.
+            new_remaining = max(0.0, remaining - weight)
 
-            save_courier(courier)
+            saved_courier["remaining_capacity_kg"] = new_remaining
+            saved_courier["available"] = (
+                bool(saved_courier["available"])
+                and new_remaining > 0
+            )
+
+            save_courier(saved_courier)
+
+            # Keep the in-memory courier consistent with SQLite.
+            courier["remaining_capacity_kg"] = new_remaining
+            courier["available"] = saved_courier["available"]
 
             await self.record_and_reply(
                 requester_jid,
@@ -458,14 +543,14 @@ class CoordinatorAgent(spade.agent.Agent):
 
             print(
                 f"[COORDINATOR] Sending {status} response "
-                f"for {parcel_id} to {recipient}"
+                f"for {parcel_id} to {recipient}: {details}"
             )
 
             await self.send(response)
 
             print(
-                f"[COORDINATOR] Response submitted for {parcel_id} "
-                f"to {recipient}"
+                f"[COORDINATOR] Response sent for {parcel_id} "
+                f"to {recipient}."
             )
 
     async def setup(self):
@@ -473,6 +558,8 @@ class CoordinatorAgent(spade.agent.Agent):
 
         print(f"[COORDINATOR] Agent {self.jid} started.")
         print("[COORDINATOR] SQLite database initialized.")
+
+        self.refresh_couriers()
 
         self.add_behaviour(self.AllocationBehaviour())
 

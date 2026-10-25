@@ -9,8 +9,18 @@ from dashboard.pages.register_page import render_register_page
 from dashboard.pages.tracking_page import render_tracking_page
 from dashboard.pages.courier_page import render_courier_page
 from dashboard.pages.allocation_page import render_allocation_page
-from dashboard.pages.simulation_page import render_simulation_page
-from dashboard.pages.experiment_setup_page import render_experiment_setup
+
+# Existing backend explanation page
+
+
+# New parcel and courier records page
+from dashboard.pages.parcel_allocation_records_page import (
+    render_parcel_allocation_records_page,
+)
+
+# Experiment pages are temporarily disabled.
+# from dashboard.pages.simulation_page import render_simulation_page
+# from dashboard.pages.experiment_setup_page import render_experiment_setup
 
 
 # ==================================================
@@ -24,6 +34,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
     menu_items={},
 )
+
+
+# ==================================================
+# AUTHENTICATION
+# ==================================================
+
+# Keep your existing authentication logic here if configured.
+# Do not remove your existing authentication implementation.
 
 
 # ==================================================
@@ -43,7 +61,6 @@ st.markdown(
             background: #F5F8FD;
         }
 
-        /* Sidebar brand */
         .sidebar-brand {
             display: flex;
             align-items: center;
@@ -84,7 +101,6 @@ st.markdown(
             padding: 12px 0 5px 3px;
         }
 
-        /* Keep sidebar navigation compact */
         [data-testid="stSidebar"] .block-container {
             padding-top: 1rem;
         }
@@ -98,13 +114,11 @@ st.markdown(
             font-weight: 500;
         }
 
-        /* Main content */
         [data-testid="stMain"] .block-container {
             padding-top: 1.6rem;
             padding-bottom: 1.5rem;
         }
 
-        /* Form controls */
         div[role="radiogroup"] {
             gap: 0.35rem;
         }
@@ -135,30 +149,50 @@ except Exception as exc:
 
 
 # ==================================================
-# PAGE CONFIGURATION
+# NAVIGATION CONFIGURATION
 # ==================================================
 
-# Each visible label maps to an existing page.
 NAVIGATION = [
     {
         "section": "WORKSPACE",
         "pages": [
             ("Home", "🏠", "Dashboard"),
             ("Register Parcel", "📦", "Parcel Requests"),
-            ("Parcel Tracking", "🔎", "Parcel Tracking"),
+            # ("Parcel Tracking", "🔎", "Parcel Tracking"),
             ("Courier Management", "🚚", "Courier Management"),
-            ("Allocation History", "📋", "Allocation History"),
+            # ("Allocation History", "📋", "Allocation History"),
+
+            # New page: parcel and courier allocation records
+            (
+                "Parcel & Courier Records",
+                "📦",
+                "Parcel & Courier Records",
+            ),
+
+            # Existing backend explanation page
+            # (
+            #     "Allocation Decision & Backend",
+            #     "🧠",
+            #     "Backend Process",
+            # ),
         ],
     },
-    {
-        "section": "MULTI-AGENT SYSTEM",
-        "pages": [
-            ("Experiment Setup", "🧪", "Experiment Setup"),
-            ("Live Agent Monitoring", "🤖", "Live Agent Monitoring"),
-            ("Experiment Results", "📈", "Experiment Results"),
-        ],
-    },
+
+    # Experiment pages remain temporarily disabled.
+    # {
+    #     "section": "MULTI-AGENT SYSTEM",
+    #     "pages": [
+    #         ("Experiment Setup", "🧪", "Experiment Setup"),
+    #         ("Live Agent Monitoring", "🤖", "Live Agent Monitoring"),
+    #         ("Experiment Results", "📈", "Experiment Results"),
+    #     ],
+    # },
 ]
+
+
+# ==================================================
+# VALIDATE NAVIGATION
+# ==================================================
 
 ALL_PAGES = [
     page_key
@@ -185,7 +219,9 @@ with st.sidebar:
             <div class="sidebar-brand-icon">📦</div>
             <div>
                 <div class="sidebar-brand-name">DeliveryMAS</div>
-                <div class="sidebar-brand-caption">DELIVERY PLATFORM</div>
+                <div class="sidebar-brand-caption">
+                    DELIVERY PLATFORM
+                </div>
             </div>
         </div>
         """,
@@ -197,13 +233,16 @@ with st.sidebar:
     for section in NAVIGATION:
 
         st.markdown(
-            f'<div class="sidebar-section">{section["section"]}</div>',
+            f'<div class="sidebar-section">'
+            f'{section["section"]}</div>',
             unsafe_allow_html=True,
         )
 
         for label, icon, page_key in section["pages"]:
 
-            is_active = st.session_state["active_page"] == page_key
+            is_active = (
+                st.session_state["active_page"] == page_key
+            )
 
             if st.button(
                 f"{icon}   {label}",
@@ -216,7 +255,6 @@ with st.sidebar:
                     st.rerun()
 
     st.markdown("---")
-
     st.caption("SYSTEM ARCHITECTURE")
     st.caption("SPADE · XMPP · SQLite")
 
@@ -234,24 +272,32 @@ elif active_page == "Parcel Requests":
     render_register_page()
 
 elif active_page == "Parcel Tracking":
-    # Reuse the existing tracking page.
     render_tracking_page()
 
 elif active_page == "Courier Management":
     render_courier_page()
 
 elif active_page == "Allocation History":
-    # The existing tracking page displays allocation history.
+    # Keep the existing allocation-history behaviour.
     render_tracking_page()
 
-elif active_page == "Experiment Setup":
-    render_experiment_setup()
+elif active_page == "Parcel & Courier Records":
+    # Display parcel details and courier allocation records
+    # using the separate page module.
+    render_parcel_allocation_records_page()
 
-elif active_page == "Live Agent Monitoring":
-    render_simulation_page()
+elif active_page == "Backend Process":
+    render_backend_process_page()
 
-elif active_page == "Experiment Results":
-    render_allocation_page()
+# Experiment pages remain temporarily disabled.
+# elif active_page == "Experiment Setup":
+#     render_experiment_setup()
+#
+# elif active_page == "Live Agent Monitoring":
+#     render_simulation_page()
+#
+# elif active_page == "Experiment Results":
+#     render_allocation_page()
 
 else:
     st.error(f"Unknown page selected: {active_page}")

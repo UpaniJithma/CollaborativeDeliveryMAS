@@ -230,12 +230,12 @@ def render_dashboard():
             "📦",
             "Parcel Requests",
         ),
-        (
-            "Parcel Tracking",
-            "Check parcel status and allocation details.",
-            "🔎",
-            "Parcel Tracking",
-        ),
+        # (
+        #     "Parcel Tracking",
+        #     "Check parcel status and allocation details.",
+        #     "🔎",
+        #     "Parcel Tracking",
+        # ),
         (
             "Courier Management",
             "Add, edit and manage courier agents.",
@@ -243,23 +243,24 @@ def render_dashboard():
             "Courier Management",
         ),
         (
-            "Allocation History",
-            "Review previous allocation records.",
-            "🕘",
-            "Allocation History",
+         "Parcel & Courier Records",
+          "Allocate parcels to suitable couriers.",
+          "🎯",
+            "Parcel & Courier Records",
         ),
-        (
-            "Experiment Workspace",
-            "Configure and run delivery experiments.",
-            "🧪",
-            "Experiment Setup",
-        ),
-        (
-            "Live Agent Monitoring",
-            "Inspect agent activity and messages.",
-            "🤖",
-            "Live Agent Monitoring",
-        ),
+        
+        # (
+        #     "Experiment Workspace",
+        #     "Configure and run delivery experiments.",
+        #     "🧪",
+        #     "Experiment Setup",
+        # ),
+        # (
+        #     "Live Agent Monitoring",
+        #     "Inspect agent activity and messages.",
+        #     "🤖",
+        #     "Live Agent Monitoring",
+        # ),
     ]
 
     # Two navigation tiles per row
